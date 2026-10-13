@@ -8,7 +8,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import os
 from missions._common import num, catalog_by_type, ROOT
 from finops import report, sustainability
-from missions import m1_efficiency_audit, m2_inference_levers, m3_purchasing
+from missions import m1_efficiency_audit, m2_inference_levers, m3_purchasing, m4_allocation
 
 DAYS = 30
 # one tier down for over-provisioned ("util-lie") GPUs
@@ -19,6 +19,7 @@ def run(verbose: bool = True) -> dict:
     r1 = m1_efficiency_audit.run(verbose=False)
     r2 = m2_inference_levers.run(verbose=False)
     r3 = m3_purchasing.run(verbose=False)
+    r4 = m4_allocation.run(verbose=False)
     cat = catalog_by_type()
 
     # --- buckets ---
@@ -49,15 +50,83 @@ def run(verbose: bool = True) -> dict:
     sust = {
         "wh_per_query": wh,
         "carbon_g": sustainability.carbon_g(wh, "us-east-1"),
-        "best_region": min(sustainability.REGION_CARBON, key=sustainability.REGION_CARBON.get),
+        "cleanest_region": r3["carbon_aware"]["cleanest_region"],
+        "cheapest_region": r3["carbon_aware"]["cheapest_region"],
     }
 
     md = report.build_report(baseline, optimized, levers, sustainability=sust)
+    reasoning = r2["reasoning"]
+    ordinary, deep = reasoning[False], reasoning[True]
+    all_energy = ordinary["energy_wh"] + deep["energy_wh"]
+    cap = r2["reasoning_cap"]
+    carbon = r3["carbon_aware"]
+    lie_ids = ", ".join(f"{gpu['gpu_id']} (util {gpu['gpu_util_pct']:.1f}%, MFU {gpu['mfu']:.2f})"
+                        for gpu in r1["lies"])
+    region_lines = [
+        "| Region | Electricity ($/kWh) | Grid (gCO2e/kWh) | Electricity ($/month) | Carbon (kg/month) |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for region, values in carbon["regions"].items():
+        region_lines.append(
+            f"| {region} | {sustainability.REGION_PRICE_KWH[region]:.3f} | "
+            f"{sustainability.REGION_CARBON[region]} | {values['electricity_usd']:,.2f} | "
+            f"{values['carbon_kg']:,.2f} |"
+        )
+    md += "\n" + "\n".join([
+        "", "## Unit economics and efficiency", "",
+        f"- Inference: **${r2['baseline_per_m']:.3f} → ${r2['optimized_per_m']:.3f} per 1M tokens** "
+        f"across {r2['total_tokens']:,} tokens/day ({r2['savings_pct']:.1f}% lower).",
+        f"- Purchasing: ${r3['on_demand_monthly']:,.0f} → ${r3['optimized_monthly']:,.0f}/month "
+        f"({r3['savings_pct']:.1f}% lower), using each job's actual scheduled days.",
+        f"- GPU-Util lies: {lie_ids}. GPU-Util measures time with active kernels, while MFU "
+        "measures useful FLOPs against peak. Memory stalls or launch overhead can keep a GPU busy "
+        "without useful throughput. Benchmark before changing GPU types.",
+        f"- Idle fleet waste: ${r1['idle_waste_daily']:,.2f}/day, or ${idle_savings:,.0f}/month. "
+        f"The ${rightsize_savings:,.0f}/month right-size estimate assumes 24h/day at catalog prices.",
+        "", "## Extension 1 — reasoning budget", "",
+        "| Traffic | Requests/day | Share of requests | Optimized cost ($/day) | Share of cost | Energy (Wh/day) | Share of energy |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+        f"| Ordinary | {ordinary['requests']:,} | {ordinary['requests'] / (ordinary['requests'] + deep['requests']):.1%} | "
+        f"{ordinary['cost_usd']:.2f} | {ordinary['cost_usd'] / (ordinary['cost_usd'] + deep['cost_usd']):.1%} | "
+        f"{ordinary['energy_wh']:,.1f} | {ordinary['energy_wh'] / all_energy:.1%} |",
+        f"| Reasoning | {deep['requests']:,} | {deep['requests'] / (ordinary['requests'] + deep['requests']):.1%} | "
+        f"{deep['cost_usd']:.2f} | {deep['cost_usd'] / (ordinary['cost_usd'] + deep['cost_usd']):.1%} | "
+        f"{deep['energy_wh']:,.1f} | {deep['energy_wh'] / all_energy:.1%} |",
+        "",
+        f"A 10% request cap is already met. A **5% cap** would reroute {cap['requests_to_reroute']} "
+        f"reasoning requests/day in a modeled scenario, saving **${cap['saved_usd_daily']:.2f}/day "
+        f"(${cap['saved_usd_daily'] * DAYS:.2f}/month)** and **{cap['saved_wh_daily']:,.1f} Wh/day**. "
+        "Gate reasoning on task difficulty or low confidence, then evaluate answer quality before applying the cap. "
+        "The model assumes ordinary fallback responses have one sixth the output tokens and uses the "
+        "lab's 80× reasoning energy factor; quality and actual power were not measured.",
+        "", "## Extension 2 — carbon-aware scheduling", "",
+        f"For interruptible jobs only, scheduled GPU-hours and catalog watts imply "
+        f"**{carbon['movable_kwh']:,.1f} kWh/month**. All regions below use the same workload energy:",
+        "", *region_lines, "",
+        f"Moving from {carbon['baseline_region']} to the cleanest region, {carbon['cleanest_region']}, "
+        f"would avoid **{carbon['carbon_saved_kg']:,.2f} kgCO2e/month** and reduce modeled "
+        f"electricity by **${carbon['electricity_saved_usd']:,.2f}/month**. "
+        f"The cheapest electricity is in {carbon['cheapest_region']}; it is not the cleanest. "
+        "Check region capacity, data residency and latency before migrating. GPU rental price differences "
+        "and migration costs are unknown, so electricity savings are excluded from the GPU spend waterfall.",
+        "", "## Action plan and measurement limits", "",
+        "1. Move eligible training and batch jobs to spot with checkpoints; purchasing has the largest "
+        "projected savings. Track interruption and recovery time against the model.",
+        "2. Route routine inference to the small model, then apply cache and batch where eligible. "
+        "Measure answer quality, latency and $/1M tokens before rollout.",
+        "3. Shut down idle fleet hours, profile the high-util/low-MFU GPUs, and use tagged cost "
+        f"showback (coverage {r4['tag_coverage']:.0%}) before chargeback.",
+        "", "Estimates use the lab's seeded June-2026 catalog, one modeled month, and aggregate "
+        "inference plus workload pools. GPU right-sizing is a price-only upper bound: memory capacity, "
+        "bandwidth and throughput must be validated. Fleet idle/right-size projections may overlap "
+        "with purchased workload capacity and require deduplication before a financial commitment. "
+        "Carbon uses catalog rated watts and illustrative grid factors, not metered energy or real-time intensity.",
+    ])
     out_md = os.path.join(ROOT, "outputs", "report.md")
     os.makedirs(os.path.dirname(out_md), exist_ok=True)
-    with open(out_md, "w") as f:
+    with open(out_md, "w", encoding="utf-8") as f:
         f.write(md)
-    png = report.savings_waterfall(levers, os.path.join(ROOT, "outputs", "savings.png"))
+    png = report.savings_waterfall(levers, os.path.join(ROOT, "outputs", "savings.png"), baseline)
 
     if verbose:
         print("== M5 Optimization Report ==")
