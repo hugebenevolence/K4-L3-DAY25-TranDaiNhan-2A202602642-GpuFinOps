@@ -29,9 +29,10 @@ def main() -> int:
 
     prompt = "GPU FinOps means measuring cost in dollars per million tokens, because"
     ids = tok(prompt, return_tensors="pt")
-    t0 = time.time()
+    model.eval()
+    t0 = time.perf_counter()
     out = model.generate(**ids, max_new_tokens=64, do_sample=False)
-    dt = time.time() - t0
+    dt = time.perf_counter() - t0
     new_tokens = out.shape[-1] - ids["input_ids"].shape[-1]
     tps = new_tokens / dt if dt > 0 else 0.0
 
@@ -41,8 +42,9 @@ def main() -> int:
 
     print(f"model={model_id}  new_tokens={new_tokens}  time={dt:.2f}s")
     print(f"REAL throughput: {tps:.1f} tok/s on CPU")
-    print(f"REAL ~${cost_per_1m:,.2f}/1M-token  (vs sim small-model ~$0.30/1M-token)")
-    print("Takeaway: tok/s and utilization drive $/token far more than the sticker $/hr.")
+    print(f"CPU-rate estimate: ${cost_per_1m:,.2f}/1M output tokens "
+          f"at ${rate_hr:.2f}/hr (vs simulated small-model output price $0.40/1M)")
+    print("Generation timing excludes model load; tiny-model quality is not comparable to a service model.")
     return 0
 
 

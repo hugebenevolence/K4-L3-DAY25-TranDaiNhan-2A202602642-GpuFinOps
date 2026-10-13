@@ -115,10 +115,12 @@ Day25-Track2-GPU-FinOps-Lab/
 |---|---|---|
 | `price_catalog.csv` | 7 GPU | `on_demand_hr`, `spot_hr`, `reserved_3yr_hr`, `peak_tflops_fp16`, `peak_bw_tbs`, `watts` |
 | `gpu_telemetry.csv` | 11 GPU × 24 giờ | `gpu_util_pct`, `achieved_tflops`, `achieved_bw_tbs`, `power_w` |
-| `token_usage.csv` | 2,400 request | `route_tier`, `input/output/cached_input_tokens`, `is_batch`, `is_reasoning`, `team`, `project` |
-| `workloads.csv` | 8 job | `hours_per_day`, `days`, `interruptible`, `gpu_type`, `num_gpus` |
+| `token_usage.csv` | 2,400 request | `route_tier`, `input_tokens`, `output_tokens`, `cache_prefix_id`, `cacheable_input_tokens`, `cached_input_tokens`, `is_batch`, `is_reasoning` |
+| `workloads.csv` | 8 job | `hours_per_day`, `days`, `expected_months`, `interruptible`, `gpu_type`, `num_gpus` |
 
 > `data/generate.py` dùng seed cố định — tái tạo luôn cho kết quả giống nhau.
+> Bản nộp này triển khai đủ **5/5 phần mở rộng**; số đo và giả định nằm trong
+> [`outputs/report.md`](outputs/report.md) và [`outputs/writeup.md`](outputs/writeup.md).
 
 ---
 
@@ -154,6 +156,8 @@ Nộp `outputs/report.md` + `savings.png` + một bài viết ngắn:
 - **`bonus/litellm_tracker/`** — proxy LiteLLM giả lập với budget cap theo API key
 - **`bonus/local_model/`** — đo tok/s thực tế trên CPU, so sánh với simulation
 - **`bonus/docker/`** — Prometheus + Grafana với dashboard chi phí GPU tích hợp sẵn
+
+Kết quả chạy thử ba bonus: [`outputs/bonus_results.md`](outputs/bonus_results.md).
 
 ---
 

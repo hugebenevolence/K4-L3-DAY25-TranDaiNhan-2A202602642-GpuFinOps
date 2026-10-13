@@ -79,16 +79,18 @@ clock, not an efficiency metric.
 |---|---|---|
 | `price_catalog.csv` | 7 GPUs | `on_demand_hr`, `spot_hr`, `reserved_3yr_hr`, `peak_tflops_fp16`, `peak_bw_tbs`, `watts` |
 | `gpu_telemetry.csv` | 11 GPUs × 24h | `gpu_util_pct`, `achieved_tflops`, `achieved_bw_tbs`, `power_w` |
-| `token_usage.csv` | 2,400 reqs | `route_tier`, `input/output/cached_input_tokens`, `is_batch`, `is_reasoning`, `team`, `project` |
-| `workloads.csv` | 8 jobs | `hours_per_day`, `days`, `interruptible`, `gpu_type`, `num_gpus` |
+| `token_usage.csv` | 2,400 reqs | `route_tier`, `input_tokens`, `output_tokens`, `cache_prefix_id`, `cacheable_input_tokens`, `cached_input_tokens`, `is_batch`, `is_reasoning` |
+| `workloads.csv` | 8 jobs | `hours_per_day`, `days`, `expected_months`, `interruptible`, `gpu_type`, `num_gpus` |
 
 `data/generate.py` is seeded — regenerating always yields identical data.
+This submission implements all **five extensions**; measurements and assumptions
+are in [`outputs/report.md`](outputs/report.md) and [`outputs/writeup.md`](outputs/writeup.md).
 
 ---
 
 ## Your Turn (extensions — where the real learning is)
 
-These are intentionally left for you. The lab passes without them; do them to go deeper.
+The lab passes without these extensions. This submission implements all five.
 
 1. **Better tier policy.** `pricing.recommend_tier()` uses a deliberately simple duty-cycle
    rule. Rewrite it to also weigh interruption rate per GPU type and the 3yr-vs-1yr discount.
@@ -99,8 +101,8 @@ These are intentionally left for you. The lab passes without them; do them to go
    charges storage). Add a `cache_is_worth_it()` check before counting cache savings.
 4. **Reasoning budget.** Quantify the extra `$` and `Wh` the `is_reasoning` traffic costs in
    M2/M5, and propose a routing rule that caps it.
-5. **Carbon-aware scheduling.** Use `sustainability` to move the interruptible training jobs
-   to the cheapest+cleanest region-hour and report the carbon saved.
+5. **Carbon-aware scheduling.** Compare electricity cost and carbon across regions for
+   interruptible jobs; the cheapest and cleanest regions can differ.
 
 ---
 
@@ -124,9 +126,11 @@ This is the **Milestone 2** FinOps input — bring the report to the platform de
 - **`bonus/litellm_tracker/`** — a LiteLLM-style token-cost proxy with per-API-key **budget
   caps** (mock backend; no key needed). Real `$/request` attribution, the §10 token tier.
 - **`bonus/local_model/`** — run a tiny model on CPU to measure **real tok/s** and compare
-  real `$/token` to the simulation. Skips gracefully if deps/model are absent.
+  an assumed CPU-rate cost to the simulation. Skips gracefully if deps/model are absent.
 - **`bonus/docker/`** — `docker-compose` with **Prometheus + Grafana** and a tiny exporter
   publishing the synthetic GPU cost/util metrics, plus a prebuilt cost dashboard.
+
+Local checks for all three bonuses: [`outputs/bonus_results.md`](outputs/bonus_results.md).
 
 ---
 

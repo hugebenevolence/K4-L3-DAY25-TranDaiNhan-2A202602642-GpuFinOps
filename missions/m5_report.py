@@ -7,7 +7,7 @@ import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import os
 from missions._common import num, catalog_by_type, ROOT
-from finops import report, sustainability
+from finops import pricing, report, sustainability
 from missions import m1_efficiency_audit, m2_inference_levers, m3_purchasing, m4_allocation
 
 DAYS = 30
@@ -27,8 +27,11 @@ def run(verbose: bool = True) -> dict:
     purchasing_savings = r3["on_demand_monthly"] - r3["optimized_monthly"]
 
     idle_savings = r1["idle_waste_daily"] * DAYS
-    rightsize_savings = 0.0
+    mbu_ids = {r["gpu_id"] for r in r1["rightsize"]}
+    rightsize_savings = r1["rightsize_savings_monthly"]
     for lie in r1["lies"]:
+        if lie["gpu_id"] in mbu_ids:
+            continue  # one GPU cannot earn two independent right-size savings
         cur = lie["gpu_type"]
         tgt = RIGHTSIZE_MAP.get(cur, cur)
         delta = num(cat[cur]["on_demand_hr"]) - num(cat[tgt]["on_demand_hr"])
@@ -37,7 +40,7 @@ def run(verbose: bool = True) -> dict:
     levers = {
         "Inference (cascade/cache/batch)": round(infer_savings),
         "Purchasing (spot/reserved)": round(purchasing_savings),
-        "Right-size util-lies": round(rightsize_savings),
+        "Right-size GPUs (deduplicated)": round(rightsize_savings),
         "Kill idle GPUs": round(idle_savings),
     }
     baseline = r2["baseline_daily"] * DAYS + r3["on_demand_monthly"]
@@ -72,6 +75,27 @@ def run(verbose: bool = True) -> dict:
             f"{sustainability.REGION_CARBON[region]} | {values['electricity_usd']:,.2f} | "
             f"{values['carbon_kg']:,.2f} |"
         )
+    mbu_lines = [
+        "| GPU | Current → candidate | Max VRAM / target HBM (GB) | Observed / target peak BW (TB/s) | $/GB-h before → after | Savings ($/month) |",
+        "|---|---|---:|---:|---:|---:|",
+    ]
+    for item in r1["rightsize"]:
+        mbu_lines.append(
+            f"| {item['gpu_id']} | {item['current']} → {item['target']} | "
+            f"{item['max_vram_gb']:.1f} / {item['target_hbm_gb']:.0f} | "
+            f"{item['observed_bw_tbs']:.3f} / {item['target_peak_bw_tbs']:.3f} | "
+            f"{item['current_usd_per_gb']:.4f} → {item['target_usd_per_gb']:.4f} | "
+            f"{item['monthly_savings']:.0f} |"
+        )
+    cache_lines = [
+        "| Tier | Avg repeat reads / prefix | Break-even reads | Eligible prefixes |",
+        "|---|---:|---:|---:|",
+    ]
+    for tier, stats in r2["cache"]["tiers"].items():
+        cache_lines.append(
+            f"| {tier} | {stats['avg_reads']:.2f} | {stats['break_even_reads']} | "
+            f"{stats['eligible_prefixes']}/{stats['prefixes']} |"
+        )
     md += "\n" + "\n".join([
         "", "## Unit economics and efficiency", "",
         f"- Inference: **${r2['baseline_per_m']:.3f} → ${r2['optimized_per_m']:.3f} per 1M tokens** "
@@ -82,8 +106,36 @@ def run(verbose: bool = True) -> dict:
         "measures useful FLOPs against peak. Memory stalls or launch overhead can keep a GPU busy "
         "without useful throughput. Benchmark before changing GPU types.",
         f"- Idle fleet waste: ${r1['idle_waste_daily']:,.2f}/day, or ${idle_savings:,.0f}/month. "
-        f"The ${rightsize_savings:,.0f}/month right-size estimate assumes 24h/day at catalog prices.",
-        "", "## Extension 1 — reasoning budget", "",
+        f"The ${rightsize_savings:,.0f}/month deduplicated right-size estimate assumes 24h/day at catalog prices.",
+        "", "## Extension 1 — duration- and interruption-aware purchasing", "",
+        f"The simple policy projected {r3['legacy_savings_pct']:.1f}% purchasing savings; "
+        f"the revised policy projects **{r3['savings_pct']:.1f}%**. The lower number accounts "
+        "for full contract billing and GPU-specific spot interruptions. A short job should not "
+        "be credited with a three-year rate without paying its commitment.",
+        f"The 36-month chat workload selects 3-year reserved; the 24-month RAG workload "
+        f"selects 1-year reserved; the 12-month search workload remains on-demand at 18h/day. "
+        f"Spot interruption assumptions range from {min(pricing.SPOT_INTERRUPT_RATE.values()):.0%} "
+        f"to {max(pricing.SPOT_INTERRUPT_RATE.values()):.0%} per GPU-hour. "
+        "M3 prints the GPU × duty cycle × interruptible recommendation matrix.",
+        "", "## Extension 2 — MBU-aware right-sizing", "",
+        "For inference GPUs with MBU below 60%, candidates must be cheaper per hour and per GB "
+        "of HBM, preserve 10% VRAM headroom and 20% bandwidth headroom over observed peaks.",
+        "", *mbu_lines, "",
+        f"These two recommendations project **${r1['rightsize_savings_monthly']:,.0f}/month**. "
+        "The A10G util-lie is already in this set; the combined waterfall counts it once. "
+        "A cheaper GPU-hour alone can fail when model weights do not fit or memory bandwidth "
+        "cannot sustain decode throughput. Benchmark latency and throughput before migration.",
+        "", "## Extension 3 — cache break-even", "",
+        f"The synthetic trace records prefix IDs, first writes and repeat reads. With a "
+        f"${r2['cache']['write_surcharge_per_m']:.2f}/1M-input-token extra write/storage "
+        "charge and 90% read discount, caching is enabled only after repeat-read savings "
+        "exceed that charge:",
+        "", *cache_lines, "",
+        f"Net cache saving is **${r2['cache']['net_savings_daily']:.3f}/day**, or "
+        f"**${r2['cache']['net_savings_daily'] * DAYS:.2f}/month**. "
+        "Small-model input is cheap, so it needs more reuse than large-model input. "
+        "Prefix IDs and the storage surcharge are illustrative, not provider billing records.",
+        "", "## Extension 4 — reasoning budget", "",
         "| Traffic | Requests/day | Share of requests | Optimized cost ($/day) | Share of cost | Energy (Wh/day) | Share of energy |",
         "|---|---:|---:|---:|---:|---:|---:|",
         f"| Ordinary | {ordinary['requests']:,} | {ordinary['requests'] / (ordinary['requests'] + deep['requests']):.1%} | "
@@ -99,7 +151,7 @@ def run(verbose: bool = True) -> dict:
         "Gate reasoning on task difficulty or low confidence, then evaluate answer quality before applying the cap. "
         "The model assumes ordinary fallback responses have one sixth the output tokens and uses the "
         "lab's 80× reasoning energy factor; quality and actual power were not measured.",
-        "", "## Extension 2 — carbon-aware scheduling", "",
+        "", "## Extension 5 — carbon-aware scheduling", "",
         f"For interruptible jobs only, scheduled GPU-hours and catalog watts imply "
         f"**{carbon['movable_kwh']:,.1f} kWh/month**. All regions below use the same workload energy:",
         "", *region_lines, "",
@@ -129,6 +181,8 @@ def run(verbose: bool = True) -> dict:
     png = report.savings_waterfall(levers, os.path.join(ROOT, "outputs", "savings.png"), baseline)
 
     if verbose:
+        if hasattr(_sys.stdout, "reconfigure"):
+            _sys.stdout.reconfigure(encoding="utf-8")
         print("== M5 Optimization Report ==")
         print(md)
         print(f"\nWritten: outputs/report.md" + (f" + outputs/savings.png" if png else " (matplotlib absent: PNG skipped)"))

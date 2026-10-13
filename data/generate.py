@@ -95,6 +95,7 @@ PROJECTS = {"search": "web-search", "rag": "doc-qa", "assistant": "chat", "eval"
 
 def gen_token_usage(rng, n=2400):
     rows = []
+    seen_prefixes = set()
     for i in range(n):
         team = rng.choices(TEAMS, weights=[3, 3, 4, 2])[0]
         # eval traffic is batchable + reasoning-heavy; chat has cacheable system prompts
@@ -103,38 +104,44 @@ def gen_token_usage(rng, n=2400):
         # 80% of requests are easy -> small model is enough (cascading opportunity)
         route_tier = "small" if rng.random() < 0.8 else "large"
         model = "small" if route_tier == "small" else "large"
+        prefix_id = f"{team}-{route_tier}-{i % 120}"
         inp = rng.randint(400, 4000)
         # chat/rag share a big static system prompt -> high cache-hit potential
         cacheable = inp * (0.7 if team in ("assistant", "rag") else 0.1)
-        cached = int(cacheable * rng.uniform(0.5, 0.95))
+        cacheable = int(cacheable * rng.uniform(0.5, 0.95))
+        cached = cacheable if prefix_id in seen_prefixes else 0
+        seen_prefixes.add(prefix_id)
         out = rng.randint(80, 1200) * (6 if is_reasoning else 1)  # reasoning tax
         rows.append([
             f"2026-06-15T{rng.randint(0,23):02d}:{rng.randint(0,59):02d}:00", model, team,
             PROJECTS[team] if rng.random() > 0.08 else "",  # ~8% untagged
-            route_tier, inp, out, cached, int(is_batch), int(is_reasoning),
+            route_tier, inp, out, cacheable, cached, prefix_id,
+            int(is_batch), int(is_reasoning),
             rng.randint(80, 4000),
         ])
     with open(os.path.join(HERE, "token_usage.csv"), "w", newline="") as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator="\n")
         w.writerow(["ts","model","team","project","route_tier","input_tokens","output_tokens",
-                    "cached_input_tokens","is_batch","is_reasoning","latency_ms"])
+                    "cacheable_input_tokens","cached_input_tokens","cache_prefix_id",
+                    "is_batch","is_reasoning","latency_ms"])
         w.writerows(rows)
 
 
 def gen_workloads():
     rows = [
-        ("job-train-llm",   "rag",       "train",  20, 14, 1, "H100", 8),
-        ("job-train-embed", "search",    "train",  10,  5, 1, "A100", 4),
-        ("job-finetune",    "assistant", "train",   6,  3, 1, "H100", 2),
-        ("job-infer-chat",  "assistant", "infer",  24, 30, 0, "A10G", 6),
-        ("job-infer-rag",   "rag",       "infer",  24, 30, 0, "A100", 3),
-        ("job-infer-search","search",    "infer",  18, 30, 0, "L4",   4),
-        ("job-dev-sandbox", "eval",      "dev",     8, 22, 1, "A10G", 2),
-        ("job-batch-eval",  "eval",      "infer",   3, 30, 1, "H100", 1),
+        ("job-train-llm",   "rag",       "train",  20, 14, 1, "H100", 8, 1),
+        ("job-train-embed", "search",    "train",  10,  5, 1, "A100", 4, 1),
+        ("job-finetune",    "assistant", "train",   6,  3, 1, "H100", 2, 1),
+        ("job-infer-chat",  "assistant", "infer",  24, 30, 0, "A10G", 6, 36),
+        ("job-infer-rag",   "rag",       "infer",  24, 30, 0, "A100", 3, 24),
+        ("job-infer-search","search",    "infer",  18, 30, 0, "L4",   4, 12),
+        ("job-dev-sandbox", "eval",      "dev",     8, 22, 1, "A10G", 2, 2),
+        ("job-batch-eval",  "eval",      "infer",   3, 30, 1, "H100", 1, 1),
     ]
     with open(os.path.join(HERE, "workloads.csv"), "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["job_id","team","kind","hours_per_day","days","interruptible","gpu_type","num_gpus"])
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["job_id","team","kind","hours_per_day","days","interruptible",
+                    "gpu_type","num_gpus","expected_months"])
         w.writerows(rows)
 
 

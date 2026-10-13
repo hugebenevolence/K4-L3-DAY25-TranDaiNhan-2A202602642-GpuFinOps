@@ -14,7 +14,7 @@ DAYS = 30
 def run(verbose: bool = True) -> dict:
     jobs = load_csv("workloads.csv")
     cat = catalog_by_type()
-    on_demand_monthly = optimized_monthly = 0.0
+    on_demand_monthly = optimized_monthly = legacy_monthly = 0.0
     recs = []
     movable_kwh = 0.0
     for j in jobs:
@@ -27,25 +27,49 @@ def run(verbose: bool = True) -> dict:
         od = num(c["on_demand_hr"])
         on_demand_cost = gpu_hours * od
 
-        tier = pricing.recommend_tier(hpd, interruptible)
+        legacy_tier = pricing.recommend_tier(hpd, interruptible)
+        if legacy_tier == "spot":
+            legacy_cost = pricing.spot_checkpoint_cost(gpu_hours, num(c["spot_hr"]), od)["spot_cost"]
+        elif legacy_tier == "reserved":
+            legacy_cost = gpu_hours * num(c["reserved_3yr_hr"])
+        else:
+            legacy_cost = on_demand_cost
+        months = int(num(j["expected_months"]))
+        tier = pricing.recommend_tier(hpd, interruptible, gpu_type=gtype,
+                                      expected_months=months, days_per_month=num(j["days"]), prices=c)
         if tier == "spot":
-            sim = pricing.spot_checkpoint_cost(gpu_hours, num(c["spot_hr"]), od)
+            sim = pricing.spot_checkpoint_cost(
+                gpu_hours, num(c["spot_hr"]), od,
+                interrupt_rate=pricing.SPOT_INTERRUPT_RATE[gtype])
             opt_cost = sim["spot_cost"]
-        elif tier == "reserved":
-            opt_cost = gpu_hours * num(c["reserved_3yr_hr"])
+        elif tier in ("reserved_1yr", "reserved_3yr"):
+            # A reservation bills for every hour of its current month, including idle hours.
+            opt_cost = DAYS * 24 * ngpu * num(c[f"{tier}_hr"])
         else:
             opt_cost = on_demand_cost
 
         on_demand_monthly += on_demand_cost
         optimized_monthly += opt_cost
+        legacy_monthly += legacy_cost
         if interruptible:
             # Catalog watts are a capacity estimate; measured job power is unavailable.
             movable_kwh += gpu_hours * num(c["watts"]) / 1000.0
-        recs.append({"job_id": j["job_id"], "gpu_type": gtype, "tier": tier,
+        recs.append({"job_id": j["job_id"], "gpu_type": gtype,
+                     "tier": "reserved" if tier.startswith("reserved_") else tier,
+                     "contract": tier if tier.startswith("reserved_") else "-",
+                     "expected_months": months, "legacy_tier": legacy_tier,
                      "on_demand": round(on_demand_cost), "optimized": round(opt_cost)})
 
     savings = on_demand_monthly - optimized_monthly
     savings_pct = savings / on_demand_monthly * 100 if on_demand_monthly else 0.0
+    legacy_savings_pct = (1 - legacy_monthly / on_demand_monthly) * 100 if on_demand_monthly else 0.0
+    matrix = [
+        {"gpu_type": gpu, "hours_per_day": hours, "interruptible": interrupt,
+         "tier": pricing.recommend_tier(hours, interrupt, gpu_type=gpu,
+                                        expected_months=24, prices=cat[gpu])}
+        for gpu in ("H100", "A100", "A10G", "L4")
+        for hours in (4, 12, 24) for interrupt in (False, True)
+    ]
     regions = {
         region: {
             "electricity_usd": round(movable_kwh * sustainability.REGION_PRICE_KWH[region], 2),
@@ -66,11 +90,16 @@ def run(verbose: bool = True) -> dict:
 
     if verbose:
         print("== M3 Purchasing Strategy ==")
-        print(f"break-even utilization @ 45% reserved discount = {pricing.break_even_utilization(0.45):.0%}")
-        print(f"{'job':18}{'gpu':7}{'tier':11}{'on-demand':>12}{'optimized':>12}")
+        print(f"legacy heuristic break-even @ 45% reserved discount = {pricing.break_even_utilization(0.45):.0%}")
+        print(f"{'job':18}{'gpu':7}{'months':>7} {'tier':10}{'contract':15}{'on-demand':>12}{'optimized':>12}")
         for r in recs:
-            print(f"{r['job_id']:18}{r['gpu_type']:7}{r['tier']:11}${r['on_demand']:>11,}${r['optimized']:>11,}")
-        print(f"\nmonthly: on-demand ${on_demand_monthly:,.0f} -> optimized ${optimized_monthly:,.0f}  ({savings_pct:.1f}% saved)")
+            print(f"{r['job_id']:18}{r['gpu_type']:7}{r['expected_months']:>7} {r['tier']:10}{r['contract']:15}"
+                  f"${r['on_demand']:>11,}${r['optimized']:>11,}")
+        print(f"\nlegacy policy savings: {legacy_savings_pct:.1f}% -> duration/risk-aware: {savings_pct:.1f}%")
+        print(f"monthly: on-demand ${on_demand_monthly:,.0f} -> optimized ${optimized_monthly:,.0f}")
+        print("24-month policy matrix (GPU, hours/day, interruptible -> tier):")
+        for r in matrix:
+            print(f"  {r['gpu_type']:5} {r['hours_per_day']:>2}h  {str(r['interruptible']):5} -> {r['tier']}")
         print(f"interruptible work: {movable_kwh:,.1f} kWh at catalog watts")
         print(f"{'region':18}{'$/kWh':>8}{'gCO2/kWh':>11}{'electricity':>14}{'carbon kg':>12}")
         for region, metrics in regions.items():
@@ -83,6 +112,7 @@ def run(verbose: bool = True) -> dict:
 
     return {"recommendations": recs, "on_demand_monthly": round(on_demand_monthly),
             "optimized_monthly": round(optimized_monthly), "savings_pct": round(savings_pct, 1),
+            "legacy_savings_pct": round(legacy_savings_pct, 1), "policy_matrix": matrix,
             "carbon_aware": carbon_aware}
 
 

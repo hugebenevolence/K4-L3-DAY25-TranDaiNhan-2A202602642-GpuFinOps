@@ -4,7 +4,7 @@ The §10 "token tier" of cost observability: attribute $/request per key/team an
 HARD-STOP requests that would blow the budget. Mock backend — no API key needed.
 """
 from __future__ import annotations
-import os, sys, time
+import math, os, sys, time
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -23,6 +23,8 @@ class BudgetExceeded(Exception):
 class CostTracker:
     def __init__(self, budgets: dict | None = None):
         self.budgets = budgets or {}          # api_key -> monthly USD cap
+        if any(not math.isfinite(cap) or cap < 0 for cap in self.budgets.values()):
+            raise ValueError("budgets must be finite, nonnegative USD amounts")
         self.spend = defaultdict(float)       # api_key -> USD spent
         self.log = []
 
@@ -33,6 +35,10 @@ class CostTracker:
                  max_output_tokens: int = 256, cached_input_tokens: int = 0,
                  batch: bool = False) -> dict:
         in_tok = self._estimate_tokens(prompt)
+        if not isinstance(max_output_tokens, int) or max_output_tokens < 0:
+            raise ValueError("max_output_tokens must be a nonnegative integer")
+        if not isinstance(cached_input_tokens, int) or not 0 <= cached_input_tokens <= in_tok:
+            raise ValueError("cached_input_tokens must be within the estimated input tokens")
         out_tok = max_output_tokens
         pin, pout = MODEL_PRICES[model]
         cost = pricing.request_cost(in_tok, out_tok, pin, pout,

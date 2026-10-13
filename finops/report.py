@@ -7,13 +7,14 @@ def build_report(baseline_usd: float, optimized_usd: float, levers: dict,
     """Return a markdown cost-optimization report."""
     savings = baseline_usd - optimized_usd
     pct = (savings / baseline_usd * 100.0) if baseline_usd > 0 else 0.0
+    pct_text = f"{pct:.1f}".rstrip("0").rstrip(".")
     lines = [
         "# NimbusAI — GPU Cost Optimization Report",
         "",
         f"- **Period:** {period}",
         f"- **Baseline spend:** ${baseline_usd:,.0f}",
         f"- **Optimized spend:** ${optimized_usd:,.0f}",
-        f"- **Projected savings:** ${savings:,.0f} (**{pct:.0f}%**)",
+        f"- **Projected savings:** ${savings:,.0f} (**{pct_text}%**)",
         "",
         "## Savings by lever",
         "",

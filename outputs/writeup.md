@@ -1,23 +1,27 @@
 # Bài viết ngắn — GPU FinOps cho NimbusAI
 
-Dữ liệu lab được sinh với seed 25, giá GPU và hệ số điện lấy từ bộ dữ liệu minh họa tháng 6/2026. Trong một tháng mô phỏng, tổng chi phí từ **18.005 USD** xuống **8.848 USD**, tức tiết kiệm dự kiến **9.157 USD (50,9%)**. Riêng inference phục vụ 7.533.027 token/ngày: giá chuẩn hóa giảm từ **6,488** xuống **1,126 USD/1 triệu token** (82,6%). Chỉ số trên token quan trọng vì giá thuê GPU/giờ thấp chưa bảo đảm chi phí trên mỗi câu trả lời thấp nếu thông lượng kém.
+Dữ liệu lab được sinh với seed 25, giá GPU và hệ số điện lấy từ bộ dữ liệu minh họa tháng 6/2026. Trong một tháng mô phỏng, tổng chi phí từ **18.005 USD** xuống **10.355 USD**, tức tiết kiệm dự kiến **7.650 USD (42,5%)**. Riêng inference phục vụ 7.533.027 token/ngày: giá chuẩn hóa giảm từ **6,488** xuống **1,229 USD/1 triệu token** (81,1%). Giá thuê GPU/giờ thấp chưa bảo đảm chi phí trên mỗi câu trả lời thấp nếu thông lượng kém; do đó USD/1 triệu token là chỉ số vận hành chính.
 
 ## Đòn bẩy và hiện tượng GPU-Util “nói dối”
 
-Mua GPU bằng spot/reserved đóng góp lớn nhất: **6.690 USD/tháng**, khoảng 73% tổng tiết kiệm dự kiến. Công việc có thể gián đoạn dùng spot kèm checkpoint; inference chạy ổn định dùng reserved. Phép tính đã xét số ngày chạy thực tế của từng job, không mặc định mọi job chạy đủ 30 ngày. Cascade, cache và batch tiết kiệm **1.212 USD/tháng**; đây là bước tiếp theo vì có thể áp dụng trên từng loại request và đo chất lượng đầu ra. Tắt giờ GPU nhàn rỗi đem lại **600 USD/tháng**.
+Mua GPU bằng spot/reserved đóng góp lớn nhất: **5.063 USD/tháng**, khoảng 66% tổng tiết kiệm dự kiến. Cascade, cache và batch tiết kiệm **1.188 USD/tháng**; right sizing sau khi loại trùng **799 USD/tháng**; tắt GPU nhàn rỗi **600 USD/tháng**. Chính sách mua ban đầu dự báo giảm 40,5% nhưng chưa tính đủ số giờ phải trả theo hợp đồng reserved. Chính sách mới xét thời gian cam kết và rủi ro gián đoạn, dự báo **30,6%**. Mức tiết kiệm thấp hơn nhưng phản ánh chi phí hợp đồng sát hơn.
 
-`gpu-h100-4` có GPU-Util **98,2%** nhưng MFU chỉ **0,19**; `gpu-a10g-1` tương ứng **96,9%** và **0,27**. GPU-Util ghi nhận thời gian kernel hoạt động, không đo FLOPs hữu ích. Chờ bộ nhớ hoặc overhead khởi chạy kernel có thể làm thiết bị trông bận trong khi thông lượng thấp. Nếu đổi H100 sang A100 và A10G sang L4 theo bảng giá, mức giảm tiền thuê *ước tính tối đa* là **655 USD/tháng**. Đây chưa phải tiết kiệm đã xác nhận: cần benchmark độ trễ, thông lượng, VRAM và băng thông trước khi đổi máy.
+`gpu-h100-4` có GPU-Util **98,2%** nhưng MFU chỉ **0,19**; `gpu-a10g-1` tương ứng **96,9%** và **0,27**. GPU-Util ghi nhận thời gian kernel hoạt động, không đo FLOPs hữu ích. Chờ bộ nhớ hoặc overhead khởi chạy kernel có thể làm thiết bị trông bận trong khi thông lượng thấp. Đổi loại GPU theo giá chỉ là giả thuyết: phải benchmark độ trễ, thông lượng, VRAM và băng thông trước khi chuyển.
 
-## Hai phần mở rộng đã đo
+## Năm phần mở rộng đã đo
 
-**Ngân sách reasoning.** Có **201/2.400 request (8,4%)** dùng reasoning, chiếm **16,5%** chi phí inference tối ưu nhưng **94,0%** năng lượng truy vấn trong mô hình. Bộ sinh dữ liệu cho output reasoning dài gấp sáu lần và hàm năng lượng áp hệ số 80×. Giới hạn 10% đã được đáp ứng; giả lập giới hạn **5%** cần chuyển 81 request/ngày về đường xử lý thường. Với đầu ra thường ngắn bằng một phần sáu, tiết kiệm dự kiến **0,41 USD** và **11,93 kWh/ngày**. Chỉ bật reasoning cho tác vụ khó hoặc độ tin cậy thấp, sau đó kiểm tra chất lượng câu trả lời; dữ liệu hiện không có nhãn chất lượng để tự động quyết định.
-
-**Lập lịch theo carbon.** Các job có thể gián đoạn tiêu thụ ước tính **1.789 kWh/tháng** khi nhân GPU giờ với công suất danh định trong catalog. Chuyển từ `us-east-1` sang vùng sạch nhất `europe-north1` giảm mô phỏng **626,15 kgCO₂e/tháng** và **53,67 USD/tháng** tiền điện. `us-east-wa` rẻ điện nhất, còn `europe-north1` sạch nhất. Cần kiểm tra năng lực vùng, vị trí dữ liệu và độ trễ. Con số điện chưa được cộng vào tiết kiệm GPU vì giá thuê theo vùng và chi phí chuyển vùng không có trong dataset.
+| Mở rộng | Kết quả chính | Ý nghĩa |
+|---|---|---|
+| **Tier policy** | Chat 36 tháng chọn reserved 3 năm; RAG 24 tháng chọn reserved 1 năm; search 12 tháng, 18 giờ/ngày giữ on-demand. Spot dùng tỷ lệ gián đoạn giả định 4–12%/giờ tùy GPU. | Một mức giá rẻ theo giờ vẫn có thể thua khi trả tiền cho giờ cam kết không dùng. |
+| **Right sizing theo MBU** | Hai A10G inference có MBU thấp được đề xuất L4, tiết kiệm mô phỏng **288 USD/tháng**. L4 vẫn đáp ứng VRAM quan sát với 10% headroom và băng thông với 20% headroom. | Chọn GPU bằng cả USD/GB HBM, sức chứa và băng thông, không chỉ USD/GPU-giờ. Khoản của `gpu-a10g-1` chỉ tính một lần trong tổng. |
+| **Cache break-even** | Prefix nhỏ cần **3** lần đọc lại, prefix lớn cần **1** lần với phụ phí ghi/lưu trữ giả định 0,50 USD/1 triệu input token. Dữ liệu có trung bình **3,04** và **0,59** lần đọc lại/prefix; chính sách bật cache cho 278/471 prefix nhỏ và 132/314 prefix lớn. Lợi ích ròng **0,402 USD/ngày**. | Đọc cache rẻ chỉ sinh lợi nếu tái sử dụng đủ để bù phí ghi. |
+| **Ngân sách reasoning** | **201/2.400 request (8,4%)** chiếm **15,2%** chi phí inference tối ưu và **94,0%** năng lượng truy vấn theo mô hình. Cap 5% giả lập chuyển 81 request/ngày về đường thường, tiết kiệm **0,41 USD** và **11,93 kWh/ngày**. | Chỉ dùng reasoning cho tác vụ khó hoặc độ tin cậy thấp; cần đo chất lượng trước khi áp dụng cap. |
+| **Lập lịch theo carbon** | Job có thể gián đoạn tiêu thụ ước tính **1.789 kWh/tháng**. Chuyển từ `us-east-1` sang `europe-north1` giảm mô phỏng **626,15 kgCO₂e** và **53,67 USD** tiền điện/tháng. | `us-east-wa` rẻ điện nhất nhưng `europe-north1` sạch nhất; lựa chọn còn phụ thuộc năng lực vùng, dữ liệu và độ trễ. |
 
 ## Ba hành động đầu tiên
 
-1. Thí điểm spot cho job training/batch có checkpoint; đo số lần gián đoạn và thời gian chạy lại so với giả định.
-2. Triển khai cascade cho request đơn giản, sau đó bật cache/batch với request phù hợp; theo dõi chất lượng, độ trễ và USD/1 triệu token.
-3. Tắt GPU nhàn rỗi và profile hai GPU có MFU thấp. Dùng tag coverage **92%** để showback chi phí cho các nhóm trước khi chargeback.
+1. Thí điểm spot cho training/batch có checkpoint, đo số lần gián đoạn, thời gian chạy lại và chi phí thực trả.
+2. Route request đơn giản sang model nhỏ, rồi bật cache/batch khi phù hợp; theo dõi chất lượng, độ trễ và USD/1 triệu token.
+3. Tắt GPU nhàn rỗi và profile GPU có MFU thấp. Dùng tag coverage **92%** để showback chi phí trước khi chargeback.
 
-Các mức tiết kiệm là kịch bản từ dữ liệu tổng hợp, chưa phải hóa đơn hay điện năng đo thực tế. Phần mua GPU và telemetry fleet có thể đại diện cho cùng công suất; cần đối soát tài nguyên để loại trùng trước khi cam kết mục tiêu tài chính. Giá và hệ số lưới điện cần cập nhật khi triển khai.
+Các con số là kịch bản từ dữ liệu tổng hợp, chưa phải hóa đơn hay điện năng đo thực tế. Thời gian cần GPU, tỷ lệ gián đoạn spot, ID prefix cache và phụ phí ghi là giả định minh họa. Phần mua GPU và telemetry fleet có thể cùng đại diện một công suất; phải đối soát để tránh trùng trước khi cam kết mục tiêu tài chính. Tiết kiệm điện theo vùng chưa cộng vào tổng vì thiếu giá thuê GPU theo vùng và chi phí di chuyển. Giá và hệ số lưới điện cần cập nhật khi triển khai.
